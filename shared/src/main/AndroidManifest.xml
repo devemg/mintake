@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <!-- Receives reminder and dose-status changes from the other device (phone <-> watch). -->
+        <service
+            android:name="com.mintake.shared.DataLayerListenerService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.DATA_CHANGED" />
+                <data
+                    android:host="*"
+                    android:pathPrefix="/mintake"
+                    android:scheme="wear" />
+            </intent-filter>
+        </service>
+    </application>
+
+</manifest>
