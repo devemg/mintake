@@ -21,7 +21,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -76,8 +75,8 @@ import java.time.ZoneId
 private sealed interface WearScreen {
     data object Today : WearScreen
     data class Alert(val doseKey: String) : WearScreen
-    data class Confirm(val status: DoseStatus, val name: String, val snoozedUntil: Long?) : WearScreen
-    data object Sync : WearScreen
+    data class Confirm(val status: DoseStatus, val name: String, val snoozedUntil: Long?) :
+        WearScreen
 }
 
 @Composable
@@ -102,10 +101,10 @@ fun WearApp(pendingDoseKey: String?, onDoseKeyConsumed: () -> Unit) {
 
     when (val current = screen) {
         WearScreen.Today -> TodayScreen(
+            repository = repository,
             state = state,
             now = now,
             onOpenDose = { screen = WearScreen.Alert(it.key) },
-            onOpenSync = { screen = WearScreen.Sync },
         )
 
         is WearScreen.Alert -> {
@@ -117,15 +116,14 @@ fun WearApp(pendingDoseKey: String?, onDoseKeyConsumed: () -> Unit) {
                     scope.launch {
                         DoseActions.apply(context, dose.key, status)
                         val record = repository.state.value.records[dose.key]
-                        screen = WearScreen.Confirm(status, dose.medicine.name, record?.snoozedUntil)
+                        screen =
+                            WearScreen.Confirm(status, dose.medicine.name, record?.snoozedUntil)
                     }
                 }
             }
         }
 
         is WearScreen.Confirm -> ConfirmScreen(current) { screen = WearScreen.Today }
-
-        WearScreen.Sync -> SyncScreen(repository = repository, now = now) { screen = WearScreen.Today }
     }
 }
 
@@ -144,7 +142,8 @@ private fun rememberNow(): State<Long> {
 @Composable
 private fun RequestNotificationPermission() {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
-    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    val launcher =
+        rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
     LaunchedEffect(Unit) { launcher.launch(Manifest.permission.POST_NOTIFICATIONS) }
 }
 
@@ -152,16 +151,27 @@ private fun RequestNotificationPermission() {
 
 @Composable
 private fun TodayScreen(
+    repository: MintakeRepository,
     state: AppState,
     now: Long,
     onOpenDose: (Dose) -> Unit,
-    onOpenSync: () -> Unit,
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val today = Instant.ofEpochMilli(now).atZone(ZoneId.systemDefault()).toLocalDate()
     val doses = remember(state.medicines, today) { Schedule.dosesOn(today, state.medicines) }
     val taken = doses.count { state.stateOf(it, now) == DoseState.TAKEN }
     val progress = if (doses.isEmpty()) 0f else taken.toFloat() / doses.size
     val listState = rememberScalingLazyListState()
+
+    val lastSynced by repository.lastSyncedAt.collectAsStateWithLifecycle()
+    var connected by remember { mutableStateOf<Boolean?>(null) }
+    var syncing by remember { mutableStateOf(false) }
+    var syncNote by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(Unit) {
+        connected = RemoteOpener.connectedNodes(context).isNotEmpty()
+    }
 
     Scaffold(
         timeText = { TimeText() },
@@ -171,15 +181,19 @@ private fun TodayScreen(
             // Daily progress ring around the bezel (gap at the top for the clock).
             CircularProgressIndicator(
                 progress = progress,
-                modifier = Modifier.fillMaxSize().padding(1.dp),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(1.dp),
                 startAngle = 300f,
                 endAngle = 240f,
                 indicatorColor = Mint,
                 trackColor = Track,
-                strokeWidth = 5.dp,
+                strokeWidth = 4.dp,
             )
             ScalingLazyColumn(
-                modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 8.dp),
                 state = listState,
                 autoCentering = AutoCenteringParams(itemIndex = 0),
             ) {
@@ -209,13 +223,88 @@ private fun TodayScreen(
                     DoseChip(dose = dose, state = state, now = now, onClick = { onOpenDose(dose) })
                 }
                 item {
-                    Chip(
-                        onClick = onOpenSync,
-                        label = { Text("Phone & sync") },
-                        icon = { Icon(Icons.Filled.Phone, contentDescription = null) },
-                        colors = ChipDefaults.secondaryChipColors(),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
+                    Spacer(Modifier.height(4.dp))
+                }
+                item {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp, vertical = 4.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        when (connected) {
+                                            true -> Mint
+                                            false -> Coral
+                                            null -> Muted
+                                        }
+                                    )
+                            )
+                            Text(
+                                text = when (connected) {
+                                    true -> "Phone connected"
+                                    false -> "Not connected"
+                                    null -> "Checking…"
+                                },
+                                style = MaterialTheme.typography.caption1,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        Text(
+                            text = syncNote ?: if (lastSynced != null) "Synced ${
+                                Format.relative(
+                                    lastSynced,
+                                    now
+                                )
+                            }" else "Not synced",
+                            style = MaterialTheme.typography.caption2,
+                            color = Muted,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(start = 14.dp),
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Button(
+                            onClick = {
+                                if (!syncing) {
+                                    scope.launch {
+                                        syncing = true
+                                        val ok = repository.syncNow()
+                                        connected =
+                                            RemoteOpener.connectedNodes(context).isNotEmpty()
+                                        syncNote = if (ok) "Up to date" else "Couldn’t reach phone"
+                                        syncing = false
+                                    }
+                                }
+                            },
+                            modifier = Modifier.size(ButtonDefaults.SmallButtonSize),
+                            colors = ButtonDefaults.secondaryButtonColors(),
+                        ) {
+                            if (syncing) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    strokeWidth = 2.dp,
+                                    indicatorColor = TextPrimary,
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Filled.Refresh,
+                                    contentDescription = "Sync now",
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -233,7 +322,7 @@ private fun DoseChip(dose: Dose, state: AppState, now: Long, onClick: () -> Unit
         secondaryLabel = {
             Text(
                 text = "${Format.time(dose.time)} · " +
-                    Format.stateLabel(doseState, dose, state.records[dose.key], now),
+                        Format.stateLabel(doseState, dose, state.records[dose.key], now),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
@@ -266,52 +355,83 @@ private fun AlertScreen(dose: Dose, state: AppState, onAction: (DoseStatus) -> U
 
     Scaffold(timeText = { TimeText() }) {
         Column(
-            modifier = Modifier.fillMaxSize().padding(horizontal = 14.dp),
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 10.dp, vertical = 6.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center,
+            verticalArrangement = Arrangement.SpaceEvenly,
         ) {
-            Spacer(Modifier.height(14.dp))
-            Text("Time for your medicine", style = MaterialTheme.typography.caption2, color = Muted)
-            Text(
-                text = dose.medicine.name,
-                style = MaterialTheme.typography.title1,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                textAlign = TextAlign.Center,
-            )
-            Text(
-                text = "${dose.medicine.doseLabel} · $timeLabel",
-                style = MaterialTheme.typography.caption1,
-                color = Muted,
-                textAlign = TextAlign.Center,
-                maxLines = 2,
-            )
-            Spacer(Modifier.height(10.dp))
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.padding(top = 10.dp)
+            ) {
+                Text(
+                    "Time for your medicine",
+                    style = MaterialTheme.typography.caption2,
+                    color = Muted
+                )
+                Text(
+                    text = dose.medicine.name,
+                    style = MaterialTheme.typography.title2,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.Center,
+                )
+                Text(
+                    text = "${dose.medicine.doseLabel} · $timeLabel",
+                    style = MaterialTheme.typography.caption1,
+                    color = Muted,
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
             Row(
-                horizontalArrangement = Arrangement.spacedBy(2.dp),
-                verticalAlignment = Alignment.Bottom,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 4.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 ActionButton(
                     label = "Not taken",
-                    size = ButtonDefaults.DefaultButtonSize,
+                    size = ButtonDefaults.SmallButtonSize,
                     background = Surface2,
                     content = Coral,
                     onClick = { onAction(DoseStatus.NOT_TAKEN) },
-                ) { Icon(Icons.Filled.Close, contentDescription = "Not taken") }
+                ) {
+                    Icon(
+                        Icons.Filled.Close,
+                        contentDescription = "Not taken",
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
                 ActionButton(
                     label = "Done",
-                    size = ButtonDefaults.LargeButtonSize,
+                    size = ButtonDefaults.DefaultButtonSize,
                     background = Mint,
                     content = MintInk,
                     onClick = { onAction(DoseStatus.TAKEN) },
-                ) { Icon(Icons.Filled.Check, contentDescription = "Done") }
+                ) {
+                    Icon(
+                        Icons.Filled.Check,
+                        contentDescription = "Done",
+                        modifier = Modifier.size(22.dp)
+                    )
+                }
                 ActionButton(
                     label = "Snooze",
-                    size = ButtonDefaults.DefaultButtonSize,
+                    size = ButtonDefaults.SmallButtonSize,
                     background = Surface2,
                     content = Amber,
                     onClick = { onAction(DoseStatus.SNOOZED) },
-                ) { Text("30m", fontWeight = FontWeight.Bold) }
+                ) {
+                    Text(
+                        "30m",
+                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.caption2
+                    )
+                }
             }
         }
     }
@@ -327,15 +447,17 @@ private fun ActionButton(
     icon: @Composable () -> Unit,
 ) {
     Column(
-        modifier = Modifier.width(62.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Button(
             onClick = onClick,
             modifier = Modifier.size(size),
-            colors = ButtonDefaults.buttonColors(backgroundColor = background, contentColor = content),
+            colors = ButtonDefaults.buttonColors(
+                backgroundColor = background,
+                contentColor = content
+            ),
         ) { icon() }
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(2.dp))
         Text(label, style = MaterialTheme.typography.caption3, color = Muted, maxLines = 1)
     }
 }
@@ -358,118 +480,46 @@ private fun ConfirmScreen(confirm: WearScreen.Confirm, onDone: () -> Unit) {
         else -> "${confirm.name}\nSynced to phone"
     }
 
-    Column(
-        modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) {
-        Box(
+    Scaffold(timeText = { TimeText() }) {
+        Column(
             modifier = Modifier
-                .size(52.dp)
-                .clip(CircleShape)
-                .background(color.copy(alpha = 0.16f)),
-            contentAlignment = Alignment.Center,
+                .fillMaxSize()
+                .padding(horizontal = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
         ) {
-            when (confirm.status) {
-                DoseStatus.TAKEN -> Icon(Icons.Filled.Check, contentDescription = null, tint = color)
-                DoseStatus.NOT_TAKEN -> Icon(Icons.Filled.Close, contentDescription = null, tint = color)
-                DoseStatus.SNOOZED -> Text("30m", color = color, fontWeight = FontWeight.Bold)
-            }
-        }
-        Spacer(Modifier.height(8.dp))
-        Text(title, style = MaterialTheme.typography.title3, textAlign = TextAlign.Center)
-        Text(subtitle, style = MaterialTheme.typography.caption1, color = Muted, textAlign = TextAlign.Center)
-    }
-}
-
-// ---------- Phone & sync ----------
-
-@Composable
-private fun SyncScreen(repository: MintakeRepository, now: Long, onBack: () -> Unit) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val lastSynced by repository.lastSyncedAt.collectAsStateWithLifecycle()
-    var connected by remember { mutableStateOf<Boolean?>(null) }
-    var syncing by remember { mutableStateOf(false) }
-    var note by remember { mutableStateOf("Add or edit reminders in the Mintake phone app.") }
-    val listState = rememberScalingLazyListState()
-
-    LaunchedEffect(Unit) { connected = RemoteOpener.connectedNodes(context).isNotEmpty() }
-
-    Scaffold(
-        timeText = { TimeText() },
-        positionIndicator = { PositionIndicator(scalingLazyListState = listState) },
-    ) {
-        ScalingLazyColumn(
-            modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp),
-            state = listState,
-            autoCentering = AutoCenteringParams(itemIndex = 0),
-        ) {
-            item {
-                ListHeader {
-                    Text(
-                        text = when (connected) {
-                            true -> "Phone connected"
-                            false -> "Phone not connected"
-                            null -> "Checking…"
-                        },
-                        textAlign = TextAlign.Center,
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(CircleShape)
+                    .background(color.copy(alpha = 0.16f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                when (confirm.status) {
+                    DoseStatus.TAKEN -> Icon(
+                        Icons.Filled.Check,
+                        contentDescription = null,
+                        tint = color
                     )
+
+                    DoseStatus.NOT_TAKEN -> Icon(
+                        Icons.Filled.Close,
+                        contentDescription = null,
+                        tint = color
+                    )
+
+                    DoseStatus.SNOOZED -> Text("30m", color = color, fontWeight = FontWeight.Bold)
                 }
             }
-            item {
-                Text(
-                    text = "Last synced ${Format.relative(lastSynced, now)}",
-                    style = MaterialTheme.typography.caption1,
-                    color = Muted,
-                )
-            }
-            item {
-                Chip(
-                    onClick = {
-                        if (!syncing) scope.launch {
-                            syncing = true
-                            val ok = repository.syncNow()
-                            note = if (ok) "Up to date." else "Couldn’t reach your phone."
-                            syncing = false
-                        }
-                    },
-                    label = { Text(if (syncing) "Syncing…" else "Sync now") },
-                    icon = { Icon(Icons.Filled.Refresh, contentDescription = null) },
-                    colors = ChipDefaults.secondaryChipColors(),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-            item {
-                Chip(
-                    onClick = {
-                        scope.launch {
-                            val ok = RemoteOpener.openOnOtherDevice(context)
-                            note = if (ok) "Opened on your phone." else "Couldn’t reach your phone."
-                        }
-                    },
-                    label = { Text("Open on phone") },
-                    icon = { Icon(Icons.Filled.Phone, contentDescription = null) },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-            item {
-                Text(
-                    text = note,
-                    style = MaterialTheme.typography.caption2,
-                    color = Muted,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(vertical = 4.dp),
-                )
-            }
-            item {
-                Chip(
-                    onClick = onBack,
-                    label = { Text("Back to today") },
-                    colors = ChipDefaults.childChipColors(),
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
+            Spacer(Modifier.height(6.dp))
+            Text(title, style = MaterialTheme.typography.title3, textAlign = TextAlign.Center)
+            Spacer(Modifier.height(2.dp))
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.caption1,
+                color = Muted,
+                textAlign = TextAlign.Center
+            )
         }
     }
 }
