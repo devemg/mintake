@@ -14,9 +14,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.FilterChip
@@ -27,6 +29,8 @@ import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -43,7 +47,6 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -58,22 +61,30 @@ import java.time.LocalDate
 import java.util.UUID
 
 @Composable
-fun AddReminderScreen(onCancel: () -> Unit, onSaved: (String) -> Unit) {
+fun AddReminderScreen(
+    medicineToEdit: Medicine? = null,
+    onCancel: () -> Unit,
+    onSaved: (name: String, isEdit: Boolean) -> Unit,
+    onDeleted: ((name: String) -> Unit)? = null,
+) {
     val context = LocalContext.current
     val repository = remember { MintakeRepository.get(context) }
     val scope = rememberCoroutineScope()
 
-    var name by rememberSaveable { mutableStateOf("") }
-    var strength by rememberSaveable { mutableStateOf("") }
-    var count by rememberSaveable { mutableIntStateOf(1) }
-    var unit by rememberSaveable { mutableStateOf(DoseUnit.TABLET) }
-    var minutes by rememberSaveable { mutableIntStateOf(8 * 60) }
-    var repeat by rememberSaveable { mutableStateOf(RepeatType.DAILY) }
-    var hours by rememberSaveable { mutableIntStateOf(8) }
+    val isEdit = medicineToEdit != null
+
+    var name by rememberSaveable { mutableStateOf(medicineToEdit?.name ?: "") }
+    var strength by rememberSaveable { mutableStateOf(medicineToEdit?.strength ?: "") }
+    var count by rememberSaveable { mutableIntStateOf(medicineToEdit?.doseCount ?: 1) }
+    var unit by rememberSaveable { mutableStateOf(medicineToEdit?.unit ?: DoseUnit.TABLET) }
+    var minutes by rememberSaveable { mutableIntStateOf(medicineToEdit?.startMinutes ?: (8 * 60)) }
+    var repeat by rememberSaveable { mutableStateOf(medicineToEdit?.repeat ?: RepeatType.DAILY) }
+    var hours by rememberSaveable { mutableIntStateOf(medicineToEdit?.intervalHours ?: 8) }
+    var enabled by rememberSaveable { mutableStateOf(medicineToEdit?.enabled ?: true) }
     var saving by remember { mutableStateOf(false) }
 
     val draft = Medicine(
-        id = "draft",
+        id = medicineToEdit?.id ?: "draft",
         name = name.trim(),
         strength = strength.trim(),
         doseCount = count,
@@ -81,6 +92,7 @@ fun AddReminderScreen(onCancel: () -> Unit, onSaved: (String) -> Unit) {
         startMinutes = minutes,
         repeat = repeat,
         intervalHours = hours,
+        enabled = enabled,
     )
     val canSave = name.isNotBlank() && !saving
 
@@ -92,14 +104,37 @@ fun AddReminderScreen(onCancel: () -> Unit, onSaved: (String) -> Unit) {
                 .imePadding()
                 .padding(horizontal = 20.dp, vertical = 12.dp),
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                IconButton(
-                    onClick = onCancel,
-                    colors = IconButtonDefaults.iconButtonColors(containerColor = Surface1, contentColor = TextPrimary),
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Cancel")
+                    IconButton(
+                        onClick = onCancel,
+                        colors = IconButtonDefaults.iconButtonColors(containerColor = Surface1, contentColor = TextPrimary),
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Cancel")
+                    }
+                    Text(if (isEdit) "Edit reminder" else "New reminder", fontSize = 28.sp, fontWeight = FontWeight.Bold)
                 }
-                Text("New reminder", fontSize = 28.sp, fontWeight = FontWeight.Bold)
+
+                if (isEdit && onDeleted != null && medicineToEdit != null) {
+                    IconButton(
+                        onClick = {
+                            scope.launch {
+                                repository.deleteMedicine(medicineToEdit.id)
+                                onDeleted(medicineToEdit.name)
+                            }
+                        },
+                        colors = IconButtonDefaults.iconButtonColors(containerColor = Surface2, contentColor = Coral),
+                    ) {
+                        Icon(Icons.Filled.Delete, contentDescription = "Delete reminder")
+                    }
+                }
             }
 
             Column(
@@ -187,7 +222,7 @@ fun AddReminderScreen(onCancel: () -> Unit, onSaved: (String) -> Unit) {
                             minusLabel = "Fewer hours",
                             plusLabel = "More hours",
                         )
-                        val times = Schedule.dosesOn(LocalDate.now(), listOf(draft))
+                        val times = Schedule.dosesOn(LocalDate.now(), listOf(draft.copy(enabled = true)))
                             .sortedBy { (it.time.hour * 60 + it.time.minute - minutes + 1440) % 1440 }
                             .map { Format.time(it.time) }
                         Text(
@@ -199,23 +234,47 @@ fun AddReminderScreen(onCancel: () -> Unit, onSaved: (String) -> Unit) {
                         )
                     }
                 }
+
+                Field(label = "Status") {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { enabled = !enabled }
+                            .padding(vertical = 4.dp),
+                    ) {
+                        Text(
+                            text = if (enabled) "Active (reminders enabled)" else "Inactive (reminders paused)",
+                            fontSize = 16.sp,
+                            color = if (enabled) TextPrimary else Muted,
+                            fontWeight = FontWeight.Medium,
+                        )
+                        Switch(
+                            checked = enabled,
+                            onCheckedChange = { enabled = it },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Ink,
+                                checkedTrackColor = Mint,
+                                uncheckedBorderColor = Outline,
+                            ),
+                        )
+                    }
+                }
             }
 
             Spacer(Modifier.height(12.dp))
-            Text(
-                text = "Syncs to your watch automatically",
-                color = Muted,
-                fontSize = 13.sp,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Spacer(Modifier.height(10.dp))
             Button(
                 onClick = {
                     saving = true
                     scope.launch {
-                        repository.addMedicine(draft.copy(id = UUID.randomUUID().toString()))
-                        onSaved(draft.name)
+                        val finalMedicine = if (isEdit && medicineToEdit != null) {
+                            draft.copy(id = medicineToEdit.id)
+                        } else {
+                            draft.copy(id = UUID.randomUUID().toString())
+                        }
+                        repository.saveMedicine(finalMedicine)
+                        onSaved(finalMedicine.name, isEdit)
                     }
                 },
                 enabled = canSave,
@@ -224,7 +283,7 @@ fun AddReminderScreen(onCancel: () -> Unit, onSaved: (String) -> Unit) {
                     .fillMaxWidth()
                     .height(56.dp),
             ) {
-                Text("Save reminder", fontSize = 17.sp, fontWeight = FontWeight.Bold)
+                Text(if (isEdit) "Save changes" else "Save reminder", fontSize = 17.sp, fontWeight = FontWeight.Bold)
             }
         }
     }

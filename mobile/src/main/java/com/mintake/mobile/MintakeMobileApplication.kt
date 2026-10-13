@@ -24,8 +24,5 @@ class MintakeMobileApplication : Application() {
                 MobileReminderScheduler.reschedule(this@MintakeMobileApplication, state)
             }
         }
-
-        // Pick up any dose updates the watch made while the phone app was closed.
-        appScope.launch { repository.syncNow() }
     }
 }

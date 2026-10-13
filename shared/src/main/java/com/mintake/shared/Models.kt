@@ -12,7 +12,7 @@ enum class DoseUnit(val label: String) {
 @Serializable
 enum class RepeatType { DAILY, WEEKDAYS, INTERVAL }
 
-/** A medicine reminder. Created on the phone, synced to the watch. */
+/** A medicine reminder. */
 @Serializable
 data class Medicine(
     val id: String,
@@ -25,6 +25,8 @@ data class Medicine(
     val repeat: RepeatType = RepeatType.DAILY,
     /** Hours between doses when [repeat] is [RepeatType.INTERVAL]. */
     val intervalHours: Int = 8,
+    /** Whether reminders for this medicine are active. */
+    val enabled: Boolean = true,
 ) {
     val doseLabel: String
         get() {
@@ -43,7 +45,7 @@ data class Medicine(
 @Serializable
 enum class DoseStatus { TAKEN, NOT_TAKEN, SNOOZED }
 
-/** What the user did with one scheduled dose (set on the watch). */
+/** What the user did with one scheduled dose (set from the notification). */
 @Serializable
 data class DoseRecord(
     val doseKey: String,
@@ -54,7 +56,7 @@ data class DoseRecord(
     val updatedAt: Long,
 )
 
-/** Everything the two devices keep in sync. */
+/** Everything the app stores. */
 @Serializable
 data class AppState(
     val medicines: List<Medicine> = emptyList(),
@@ -62,11 +64,9 @@ data class AppState(
     val records: Map<String, DoseRecord> = emptyMap(),
 )
 
-object DataLayer {
-    const val STATE_PATH = "/mintake/state"
-    const val KEY_JSON = "json"
-    const val KEY_TIMESTAMP = "ts"
-
-    /** Deep link both apps answer to, used to open the app on the other device. */
-    const val OPEN_URI = "mintake://open"
-}
+/** Data the user can download from the phone's settings. */
+@Serializable
+data class ExportData(
+    val reminders: List<Medicine>,
+    val history: List<DoseRecord>,
+)

@@ -27,12 +27,8 @@ kotlin {
 }
 
 dependencies {
-    api(libs.play.services.wearable)
     api(libs.kotlinx.coroutines.android)
-    api(libs.kotlinx.coroutines.play.services)
     api(libs.kotlinx.serialization.json)
-    api(libs.androidx.wear.remote.interactions)
-    implementation(libs.androidx.concurrent.futures.ktx)
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.androidx.core.ktx)
 }

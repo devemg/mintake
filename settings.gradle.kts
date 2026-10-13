@@ -24,4 +24,3 @@ rootProject.name = "Mintake"
 
 include(":shared")
 include(":mobile")
-include(":wear")

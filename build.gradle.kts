@@ -1,4 +1,4 @@
-// Top-level build file. Module settings live in shared/, mobile/ and wear/.
+// Top-level build file. Module settings live in shared/ and mobile/.
 plugins {
     alias(libs.plugins.android.application) apply false
     alias(libs.plugins.android.library) apply false

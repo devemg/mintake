@@ -11,7 +11,6 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        // Must match the watch app's applicationId so the two can sync.
         applicationId = "com.mintake.reminders"
         minSdk = 26
         targetSdk = 35

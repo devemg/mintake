@@ -27,7 +27,7 @@ object Schedule {
     private const val MINUTES_PER_DAY = 24 * 60
 
     fun dosesOn(date: LocalDate, medicines: List<Medicine>): List<Dose> =
-        medicines.flatMap { medicine ->
+        medicines.filter { it.enabled }.flatMap { medicine ->
             val minutes = when (medicine.repeat) {
                 RepeatType.DAILY -> listOf(medicine.startMinutes)
                 RepeatType.WEEKDAYS ->
