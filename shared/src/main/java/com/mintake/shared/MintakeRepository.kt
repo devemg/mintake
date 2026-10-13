@@ -19,16 +19,18 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
-import java.time.LocalDate
 
 private val Context.mintakeStore: DataStore<Preferences> by preferencesDataStore(name = "mintake")
 
 /** Single source of truth for reminders and dose records, saved locally with DataStore. */
-class MintakeRepository private constructor(private val context: Context) {
+class MintakeRepository internal constructor(
+    private val dataStore: DataStore<Preferences>,
+) {
 
     private val json = Json {
         ignoreUnknownKeys = true
         encodeDefaults = true
+        coerceInputValues = true
     }
     private val exportFormat = Json {
         encodeDefaults = true
@@ -38,16 +40,33 @@ class MintakeRepository private constructor(private val context: Context) {
     private val mutex = Mutex()
     private val loaded = CompletableDeferred<Unit>()
 
+    @Volatile
+    internal var hasLoadFailed: Boolean = false
+        private set
+
     private val _state = MutableStateFlow(AppState())
     val state: StateFlow<AppState> = _state.asStateFlow()
 
     init {
         scope.launch {
             try {
-                val stored = context.mintakeStore.data.first()[STATE_KEY]
-                if (stored != null) decode(stored)?.let { _state.value = it }
+                val stored = dataStore.data.first()[STATE_KEY]
+                if (stored != null) {
+                    val decoded = decode(stored)
+                    if (decoded != null) {
+                        _state.value = migrateIfNeeded(decoded)
+                    } else {
+                        hasLoadFailed = true
+                        val backupKey = stringPreferencesKey("state_backup_${System.currentTimeMillis()}")
+                        runCatching {
+                            dataStore.edit { it[backupKey] = stored }
+                        }
+                        Log.e(TAG, "Saved state could not be decoded; backed up raw string to key before continuing")
+                    }
+                }
             } catch (e: Exception) {
-                Log.w(TAG, "Could not read saved state", e)
+                hasLoadFailed = true
+                Log.e(TAG, "Could not read saved state from DataStore", e)
             } finally {
                 loaded.complete(Unit)
             }
@@ -79,7 +98,6 @@ class MintakeRepository private constructor(private val context: Context) {
         state.copy(
             medicines = state.medicines.filterNot { it.id == id },
             medicinesUpdatedAt = System.currentTimeMillis(),
-            records = state.records.filterValues { !it.doseKey.startsWith("$id|") },
         )
     }
 
@@ -92,7 +110,7 @@ class MintakeRepository private constructor(private val context: Context) {
                 snoozedUntil = snoozedUntil,
                 updatedAt = System.currentTimeMillis(),
             )
-            state.copy(records = prune(state.records + (doseKey to record)))
+            state.copy(records = state.records + (doseKey to record))
         }
 
     /** Reminders and dose history as a readable JSON document. */
@@ -106,34 +124,54 @@ class MintakeRepository private constructor(private val context: Context) {
         return exportFormat.encodeToString(ExportData.serializer(), export)
     }
 
+    /** Reset state explicitly if load failed and user wants a fresh start. */
+    suspend fun resetState() {
+        awaitLoaded()
+        mutex.withLock {
+            hasLoadFailed = false
+            val fresh = AppState()
+            _state.value = fresh
+            dataStore.edit { it[STATE_KEY] = json.encodeToString(AppState.serializer(), fresh) }
+        }
+    }
+
     private suspend fun update(transform: (AppState) -> AppState) {
         awaitLoaded()
+        if (hasLoadFailed) {
+            Log.e(TAG, "Skipping state update because initial state load failed. Refusing to overwrite stored data.")
+            throw IllegalStateException("Cannot update repository state when initial load failed; refusing to overwrite stored data.")
+        }
         mutex.withLock {
             val updated = transform(_state.value)
             _state.value = updated
-            context.mintakeStore.edit { it[STATE_KEY] = json.encodeToString(AppState.serializer(), updated) }
+            dataStore.edit { it[STATE_KEY] = json.encodeToString(AppState.serializer(), updated) }
         }
     }
 
     private fun decode(raw: String): AppState? =
         runCatching { json.decodeFromString(AppState.serializer(), raw) }.getOrNull()
 
-    /** Keeps only the last few days of dose records. */
-    private fun prune(records: Map<String, DoseRecord>): Map<String, DoseRecord> {
-        val cutoff = LocalDate.now().minusDays(3).toString()
-        return records.filterValues { it.date >= cutoff }
+    private fun migrateIfNeeded(state: AppState): AppState {
+        var current = state
+        if (current.schemaVersion < AppState.CURRENT_SCHEMA_VERSION) {
+            current = current.copy(schemaVersion = AppState.CURRENT_SCHEMA_VERSION)
+        }
+        return current
     }
 
     companion object {
         private const val TAG = "MintakeRepository"
-        private val STATE_KEY = stringPreferencesKey("state")
+        internal val STATE_KEY = stringPreferencesKey("state")
 
         @Volatile
         private var instance: MintakeRepository? = null
 
         fun get(context: Context): MintakeRepository =
             instance ?: synchronized(this) {
-                instance ?: MintakeRepository(context.applicationContext).also { instance = it }
+                instance ?: MintakeRepository(context.applicationContext.mintakeStore).also { instance = it }
             }
+
+        fun createForTest(dataStore: DataStore<Preferences>): MintakeRepository =
+            MintakeRepository(dataStore)
     }
 }

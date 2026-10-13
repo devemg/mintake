@@ -59,10 +59,15 @@ data class DoseRecord(
 /** Everything the app stores. */
 @Serializable
 data class AppState(
+    val schemaVersion: Int = CURRENT_SCHEMA_VERSION,
     val medicines: List<Medicine> = emptyList(),
     val medicinesUpdatedAt: Long = 0L,
     val records: Map<String, DoseRecord> = emptyMap(),
-)
+) {
+    companion object {
+        const val CURRENT_SCHEMA_VERSION = 1
+    }
+}
 
 /** Data the user can download from the phone's settings. */
 @Serializable
