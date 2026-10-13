@@ -3,10 +3,12 @@ package com.mintake.mobile.ui
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -26,10 +28,10 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -44,6 +46,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -66,6 +72,55 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
+/** Vector image for watch/clock icon */
+private val WatchClockIcon: ImageVector by lazy {
+    ImageVector.Builder(
+        name = "WatchClock",
+        defaultWidth = 24.dp,
+        defaultHeight = 24.dp,
+        viewportWidth = 24f,
+        viewportHeight = 24f
+    ).apply {
+        path(fill = SolidColor(Color.White)) {
+            moveTo(9f, 2f)
+            lineTo(15f, 2f)
+            lineTo(15f, 4.5f)
+            lineTo(9f, 4.5f)
+            close()
+        }
+        path(fill = SolidColor(Color.White)) {
+            moveTo(9f, 19.5f)
+            lineTo(15f, 19.5f)
+            lineTo(15f, 22f)
+            lineTo(9f, 22f)
+            close()
+        }
+        path(fill = SolidColor(Color.White)) {
+            moveTo(12f, 4f)
+            curveTo(7.58f, 4f, 4f, 7.58f, 4f, 12f)
+            curveTo(4f, 16.42f, 7.58f, 20f, 12f, 20f)
+            curveTo(16.42f, 20f, 20f, 16.42f, 20f, 12f)
+            curveTo(20f, 7.58f, 16.42f, 4f, 12f, 4f)
+            close()
+            moveTo(12f, 18f)
+            curveTo(8.69f, 18f, 6f, 15.31f, 6f, 12f)
+            curveTo(6f, 8.69f, 8.69f, 6f, 12f, 6f)
+            curveTo(15.31f, 6f, 18f, 8.69f, 18f, 12f)
+            curveTo(18f, 15.31f, 15.31f, 18f, 12f, 18f)
+            close()
+        }
+        path(fill = SolidColor(Color.White)) {
+            moveTo(11.25f, 7.5f)
+            lineTo(11.25f, 12.5f)
+            lineTo(15f, 14.25f)
+            lineTo(15.75f, 13f)
+            lineTo(12.5f, 11.5f)
+            lineTo(12.5f, 7.5f)
+            close()
+        }
+    }.build()
+}
+
 @Composable
 fun HomeScreen(toast: String?, onAddReminder: () -> Unit) {
     val context = LocalContext.current
@@ -75,9 +130,27 @@ fun HomeScreen(toast: String?, onAddReminder: () -> Unit) {
     var toDelete by remember { mutableStateOf<Medicine?>(null) }
     val scope = rememberCoroutineScope()
 
+    var connected by remember { mutableStateOf<Boolean?>(null) }
+    var retrying by remember { mutableStateOf(false) }
+
     val today = Instant.ofEpochMilli(now).atZone(ZoneId.systemDefault()).toLocalDate()
     val doses = remember(state.medicines, today) { Schedule.dosesOn(today, state.medicines) }
     val taken = doses.count { state.stateOf(it, now) == DoseState.TAKEN }
+
+    fun refreshConnection() {
+        if (!retrying) {
+            scope.launch {
+                retrying = true
+                repository.syncNow()
+                connected = RemoteOpener.connectedNodes(context).isNotEmpty()
+                retrying = false
+            }
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        connected = RemoteOpener.connectedNodes(context).isNotEmpty()
+    }
 
     Scaffold(containerColor = Ink) { padding ->
         Column(
@@ -87,18 +160,99 @@ fun HomeScreen(toast: String?, onAddReminder: () -> Unit) {
                 .padding(horizontal = 20.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp),
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(
-                    text = "Today · " + DateTimeFormatter.ofPattern("EEE, MMM d", Locale.getDefault()).format(today),
-                    color = Muted,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Text("Medicines", fontSize = 34.sp, fontWeight = FontWeight.Bold)
+            // Top Header: App Title & Date on Left, Watch Status & Retry on Right
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                    modifier = Modifier.weight(1f, fill = false),
+                ) {
+                    Text(
+                        text = "Today · " + DateTimeFormatter.ofPattern("EEE, MMM d", Locale.getDefault()).format(today),
+                        color = Muted,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text("MinTake", fontSize = 34.sp, fontWeight = FontWeight.Bold)
+                }
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    // Show Retry button if watch is disconnected
+                    if (connected == false) {
+                        FilledTonalButton(
+                            onClick = { refreshConnection() },
+                            modifier = Modifier.height(36.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp),
+                            colors = ButtonDefaults.filledTonalButtonColors(
+                                containerColor = Surface2,
+                                contentColor = TextPrimary,
+                            ),
+                        ) {
+                            if (retrying) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(14.dp),
+                                    color = TextPrimary,
+                                    strokeWidth = 2.dp,
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = Icons.Filled.Refresh,
+                                    contentDescription = "Retry connection",
+                                    modifier = Modifier.size(14.dp),
+                                )
+                            }
+                            Spacer(Modifier.width(6.dp))
+                            Text("Retry", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    // Watch / Clock Icon with Red or Green connection status indicator
+                    Box(
+                        modifier = Modifier
+                            .size(42.dp)
+                            .clip(CircleShape)
+                            .background(Surface1)
+                            .clickable { refreshConnection() },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = WatchClockIcon,
+                            contentDescription = when (connected) {
+                                true -> "Watch connected"
+                                false -> "Watch disconnected"
+                                null -> "Checking watch connection"
+                            },
+                            tint = TextPrimary,
+                            modifier = Modifier.size(22.dp),
+                        )
+
+                        // Red/Green/Gray connection dot
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(3.dp)
+                                .size(10.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    when (connected) {
+                                        true -> Mint       // Green
+                                        false -> Coral     // Red
+                                        null -> Muted      // Gray/checking
+                                    }
+                                )
+                                .border(1.5.dp, Surface1, CircleShape),
+                        )
+                    }
+                }
             }
 
-            WatchCard(repository = repository, now = now)
-
+            // Schedule Progress Card
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -121,6 +275,7 @@ fun HomeScreen(toast: String?, onAddReminder: () -> Unit) {
                 )
             }
 
+            // Doses List
             LazyColumn(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -198,96 +353,6 @@ private fun rememberNowMillis(): Long {
         }
     }
     return now
-}
-
-@Composable
-private fun WatchCard(repository: MintakeRepository, now: Long) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val lastSynced by repository.lastSyncedAt.collectAsStateWithLifecycle()
-    var watchName by remember { mutableStateOf<String?>(null) }
-    var checked by remember { mutableStateOf(false) }
-    var syncing by remember { mutableStateOf(false) }
-    var message by remember { mutableStateOf<String?>(null) }
-
-    LaunchedEffect(Unit) {
-        watchName = RemoteOpener.connectedNodes(context).firstOrNull()?.displayName
-        checked = true
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(24.dp))
-            .background(Surface1)
-            .padding(18.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-            Box(
-                modifier = Modifier
-                    .size(48.dp)
-                    .clip(CircleShape)
-                    .background(Mint.copy(alpha = 0.16f)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Box(
-                    Modifier
-                        .size(20.dp)
-                        .border(2.5.dp, Mint, CircleShape),
-                )
-            }
-            Column(Modifier.weight(1f)) {
-                Text(
-                    text = watchName ?: if (checked) "No watch connected" else "Looking for your watch…",
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = (if (watchName != null) "Connected · " else "") + "Synced ${Format.relative(lastSynced, now)}",
-                    color = Muted,
-                    fontSize = 14.sp,
-                )
-            }
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            FilledTonalButton(
-                onClick = {
-                    if (!syncing) scope.launch {
-                        syncing = true
-                        message = if (repository.syncNow()) null else "Couldn’t reach your watch"
-                        syncing = false
-                    }
-                },
-                modifier = Modifier
-                    .weight(1f)
-                    .height(48.dp),
-                colors = ButtonDefaults.filledTonalButtonColors(containerColor = Surface2, contentColor = TextPrimary),
-            ) {
-                Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(8.dp))
-                Text(if (syncing) "Syncing…" else "Sync now", fontWeight = FontWeight.Bold)
-            }
-            FilledTonalButton(
-                onClick = {
-                    scope.launch {
-                        message = if (RemoteOpener.openOnOtherDevice(context))
-                            "Mintake opened on your watch"
-                        else "Couldn’t reach your watch"
-                    }
-                },
-                modifier = Modifier
-                    .weight(1f)
-                    .height(48.dp),
-                colors = ButtonDefaults.filledTonalButtonColors(containerColor = Surface2, contentColor = TextPrimary),
-            ) {
-                Text("Open on watch", fontWeight = FontWeight.Bold)
-            }
-        }
-        message?.let { Text(it, color = Mint, fontSize = 13.sp, fontWeight = FontWeight.SemiBold) }
-    }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
